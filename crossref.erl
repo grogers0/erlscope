@@ -2,18 +2,9 @@
 
 -export([build/3]).
 
+-include("crossref.hrl").
+
 -define(CSCOPE_VERSION, 15).
-
-%-define(DEFINEBEGIN, $\#).
-%-define(DEFINEEND, $\)).
--define(FUNCTIONCALL, $`).
--define(FUNCTIONDEFBEGIN, $\$).
--define(FUNCTIONDEFEND, $}).
-%-define(INCLUDE, $~).
--define(NEWFILE, $@).
-%-define(RECORDDEF, $s).
-
-
 
 build(SrcDirs, IncDirs, SrcFiles) ->
     CscopeDb = "cscope.out",
@@ -72,7 +63,7 @@ build_crossref_of_file(Filename, AbsForms) ->
 %% Outputs a deep list suitable for writing to the crossref file
 form_to_crossref(Filename, Form) ->
     case erl_syntax:type(Form) of
-        attribute -> [];  %% @fixme ignore for now
+        attribute -> attribute_to_crossref(Form);
         function -> function_to_crossref(Form);
 
         error_marker ->
@@ -87,6 +78,18 @@ form_to_crossref(Filename, Form) ->
             io:format(standard_error, "error: ~s:~b: unhandled form type: ~s~n",
                     [Filename, erl_syntax:get_pos(Form), erl_syntax:type(Form)]),
             []
+    end.
+
+attribute_to_crossref(Attribute) ->
+    case erl_syntax:atom_value(erl_syntax:attribute_name(Attribute)) of
+        include ->
+            StartStr = io_lib:format("~b -include(~n", [erl_syntax:get_pos(Attribute)]),
+            [File] = erl_syntax:attribute_arguments(Attribute),
+            IncludeStr = io_lib:format("\t~c\"~s~n", [?INCLUDE, erl_syntax:string_value(File)]),
+            EndStr = "\").\n",
+            [StartStr, IncludeStr, EndStr];
+
+        _ -> []  % ignore unused attributes
     end.
 
 function_to_crossref(Function) ->

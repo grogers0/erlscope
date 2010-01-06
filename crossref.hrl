@@ -1,0 +1,8 @@
+-define(DEFINEBEGIN, $\#).
+-define(DEFINEEND, $\)).
+-define(FUNCTIONCALL, $`).
+-define(FUNCTIONDEFBEGIN, $\$).
+-define(FUNCTIONDEFEND, $}).
+-define(INCLUDE, $~).
+-define(NEWFILE, $@).
+-define(RECORDDEF, $s).

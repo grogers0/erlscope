@@ -1,6 +1,5 @@
 -module(erlscope).
 -export([main/0]).
--compile([export_all]).
 
 main() ->
     Filenames = get_files("cscope.files"),
@@ -14,7 +13,7 @@ get_files(Filename) ->
 
 read_filenames_from(File, Acc) ->
     case file:read_line(File) of
-        eof -> Acc;
+        eof -> lists:reverse(Acc);
         {ok, Data} ->
             read_filenames_from(File, [string:strip(Data, both, $\n) | Acc])
     end.
