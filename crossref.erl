@@ -6,6 +6,9 @@
 
 -define(CSCOPE_VERSION, 15).
 
+-record(test, {junk, init = "somestring",
+        morestuff}).
+
 build(SrcDirs, IncDirs, SrcFiles) ->
     CscopeDb = "cscope.out",
     TempCscopeDb = "tmp.cscope.out",
@@ -54,48 +57,104 @@ parse_file_write_crossref(Filename, OutFile) ->
     lists:flatlength(DeepStr).
 
 % @note returns a deep list
-build_crossref_of_file(Filename, AbsForms) ->
-    [$\t, ?NEWFILE, Filename, $\n, $\n,
-        lists:foldl(fun(Form, Acc) -> [Acc, form_to_crossref(Filename, Form)] end,
-            [], AbsForms)].
+build_crossref_of_file(Filename, Forms) ->
+    ["\t", ?NEWFILE, Filename, "\n",
+        element(1, fold_syntax_tree_list_to_crossref(0, Forms))].
 
+fold_syntax_tree_list_to_crossref(LastEndLine, Forms) ->
+    lists:foldl(fun(Form, {Str1, EndLine1}) ->
+            {Str2, EndLine2} = syntax_tree_to_crossref(EndLine1, Form),
+            {[Str1, Str2], EndLine2} end,
+            {[], LastEndLine}, Forms).
 
-%% Outputs a deep list suitable for writing to the crossref file
-form_to_crossref(Filename, Form) ->
-    case erl_syntax:type(Form) of
-        attribute -> attribute_to_crossref(Form);
-        function -> function_to_crossref(Form);
+%% @spec syntax_tree_to_crossref(integer(), term()) ->
+%%          {iolist(), integer()}
+%% @doc Outputs a deep list suitable for writing to the crossref file, as well
+%% as the last line of the crossref it has written so far
+syntax_tree_to_crossref(LastEndLine, Tree) ->
+    StartLine = erl_syntax:get_pos(Tree),
+    TreeType = erl_syntax:type(Tree),
+    {CrossRef, EndLine} = case TreeType of
+        attribute -> attribute_to_crossref(StartLine, Tree);
+        function -> function_to_crossref(StartLine, Tree);
 
         error_marker ->
-            io:format(standard_error, "parse error: ~s:~b: ~s~n",
-                    [Filename, erl_syntax:get_pos(Form), erl_syntax:error_marker_info(Form)]),
-            [];
+            io:format(standard_error, "parse error: line ~b: ~s~n",
+                    [StartLine, erl_syntax:error_marker_info(Tree)]),
+            {[], StartLine};
         warning_marker ->
-            io:format(standard_error, "parse warning: ~s:~b: ~s~n",
-                    [Filename, erl_syntax:get_pos(Form), erl_syntax:warning_marker_info(Form)]),
-            [];
+            io:format(standard_error, "parse warning: line ~b: ~s~n",
+                    [StartLine, erl_syntax:warning_marker_info(Tree)]),
+            {[], StartLine};
         _ ->
-            io:format(standard_error, "error: ~s:~b: unhandled form type: ~s~n",
-                    [Filename, erl_syntax:get_pos(Form), erl_syntax:type(Form)]),
-            []
-    end.
+            io:format(standard_error, "error: line ~b: unhandled syntax tree type: ~s: ~p~n",
+                    [StartLine, TreeType, Tree]),
+            {[], StartLine}
+    end,
+    {[
+        if
+            StartLine /= LastEndLine -> io_lib:format("\n~b \n", [StartLine]);
+            true -> []
+        end,
+        CrossRef
+    ], EndLine}.
 
-attribute_to_crossref(Attribute) ->
-    case erl_syntax:atom_value(erl_syntax:attribute_name(Attribute)) of
-        include ->
-            StartStr = io_lib:format("~b -include(~n", [erl_syntax:get_pos(Attribute)]),
-            [File] = erl_syntax:attribute_arguments(Attribute),
-            IncludeStr = io_lib:format("\t~c\"~s~n", [?INCLUDE, erl_syntax:string_value(File)]),
-            EndStr = "\").\n",
-            [StartStr, IncludeStr, EndStr];
+attribute_to_crossref(LastEndLine, Attribute) ->
+    StartLine = erl_syntax:get_pos(Attribute),
+    AttributeNameAtom = erl_syntax:atom_value(erl_syntax:attribute_name(Attribute)),
+    AttributeArgs = erl_syntax:attribute_arguments(Attribute),
+    {CrossRef, EndLine} = case AttributeNameAtom of
+        include -> include_to_crossref(StartLine, AttributeArgs);
+        record -> record_to_crossref(StartLine, AttributeArgs);
 
-        _ -> []  % ignore unused attributes
-    end.
+        _ -> fold_syntax_tree_list_to_crossref(StartLine, AttributeArgs)
+    end,
+    {[
+        if
+            StartLine /= LastEndLine ->
+                io_lib:format("\n~b ", [StartLine]);
+            true -> []
+        end,
+        io_lib:format("-~s(\n", [AttributeNameAtom]),
+        CrossRef,
+        ").\n"
+    ], EndLine}.
 
-function_to_crossref(Function) ->
-    StartStr = io_lib:format("~b ~n", [erl_syntax:get_pos(Function)]),
-    FunctionName = erl_syntax:atom_name(erl_syntax:function_name(Function)),
-    FuncBeginStr = io_lib:format("\t~c~s~n", [?FUNCTIONDEFBEGIN, FunctionName]),
-    FuncEndStr = io_lib:format("\t~c~s~n", [?FUNCTIONDEFEND, FunctionName]),
-    [StartStr, FuncBeginStr, FuncEndStr, $\n].
-    
+include_to_crossref(LastEndLine, IncludeArgs) ->
+    [File] = IncludeArgs,
+    StartLine = erl_syntax:get_pos(File),
+    {[
+        if
+            StartLine /= LastEndLine ->
+                io_lib:format("\n~b ", [StartLine]);
+            true -> []
+        end,
+        io_lib:format("\t~c\"~s\n", [?INCLUDE, erl_syntax:string_value(File)]),
+        "\"\n"
+    ], StartLine}.
+
+record_to_crossref(LastEndLine, RecordArgs) ->
+    StartLine = LastEndLine,
+    {[
+        if
+            StartLine /= LastEndLine ->
+                io_lib:format("\n~b \n", [StartLine]);
+            true -> []
+        end,
+        [] % @fixme record fields tuple
+    ], StartLine}.
+
+function_to_crossref(LastEndLine, FunctionArgs) ->
+    StartLine = erl_syntax:get_pos(FunctionArgs),
+    FunctionNameAtom = erl_syntax:atom_literal(erl_syntax:function_name(FunctionArgs)),
+    {[
+        if
+            StartLine /= LastEndLine ->
+                io_lib:format("\n~b \n", [StartLine]);
+            true -> []
+        end,
+        io_lib:format("\t~c~s\n", [?FUNCTIONDEFBEGIN, FunctionNameAtom]),
+        % @fixme function args, guards, clauses
+        io_lib:format("\t~c~s\n", [?FUNCTIONDEFEND, FunctionNameAtom])
+    ], StartLine}.
+
