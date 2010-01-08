@@ -6,6 +6,17 @@
 
 -define(CSCOPE_VERSION, 15).
 
+-define(TEST_FLOAT, 140.25).
+-define(TEST_ATOM, test_some_atom).
+-define(TEST_STRING, "test some string").
+-define(TEST_NIL, []).
+-define(TEST_LIST, [12, 15, 26]).
+-define(TEST_TUPLE, {12, 15, 26}).
+-define(TEST_BINARY1, <<12, 15:8, 26/little-signed, 52:32/native-unsigned>>).
+-define(TEST_BINARY2, <<>>).
+
+-define(TEST_FUN(X, Y, Z), [{x, X}, {y, Y}, {z, Z}]).
+
 -record(test, {junk, init = "somestring",
         morestuff}).
 -record(test1, {stuff, junk}).
@@ -69,7 +80,7 @@ atom(LastEndLine, Node) ->
     StartLine = erl_syntax:get_pos(Node),
     {[
         newline(StartLine, LastEndLine),
-        io_lib:format("~s\n", [erl_syntax:atom_value(Node)])
+        io_lib:format("~s\n", [erl_syntax:atom_literal(Node)])
     ], StartLine}.
 
 attribute(LastEndLine, Node) ->
@@ -79,6 +90,7 @@ attribute(LastEndLine, Node) ->
     {CrossRef, EndLine} = case Name of
         include -> include(StartLine, Arguments);
         record -> record(StartLine, Arguments);
+        define -> define(StartLine, Arguments);
 
         _ -> syntax_tree_list(StartLine, ",\n", Arguments)
     end,
@@ -88,6 +100,79 @@ attribute(LastEndLine, Node) ->
         CrossRef,
         ").\n"
     ], EndLine}.
+
+binary(LastEndLine, Node) ->
+    StartLine = erl_syntax:get_pos(Node),
+    {CrossRef, EndLine} =
+        syntax_tree_list(StartLine, ",\n", erl_syntax:binary_fields(Node)),
+    {[
+        newline(StartLine, LastEndLine),
+        "<<\n",
+        CrossRef,
+        ">>\n"
+    ], EndLine}.
+
+binary_field(LastEndLine, Node) ->
+    StartLine = erl_syntax:get_pos(Node),
+    {CrossRefBody, EndLineBody} =
+        syntax_tree(StartLine, erl_syntax:binary_field_body(Node)),
+    {CrossRefTypes, EndLineTypes} = case erl_syntax:binary_field_types(Node) of
+        [] -> {[], EndLineBody};
+        Types ->
+            {CrossRefTypes1, EndLineTypes1} = syntax_tree_list(EndLineBody, "-\n", Types),
+            {["/\n" ++ CrossRefTypes1], EndLineTypes1}
+    end,
+    EndLine = EndLineTypes,
+    {[
+        newline(StartLine, LastEndLine),
+        CrossRefBody,
+        CrossRefTypes
+    ], EndLine}.
+
+char(LastEndLine, Node) ->
+    StartLine = erl_syntax:get_pos(Node),
+    {[
+        newline(StartLine, LastEndLine),
+        io_lib:format("~s\n", [erl_syntax:char_literal(Node)])
+    ], StartLine}.
+
+define(LastEndLine, [Const, Node]) ->
+    case erl_syntax:type(Const) of
+        variable -> define_const(LastEndLine, [Const, Node]);
+        _ -> syntax_tree_list(LastEndLine, ",\n", [Const, Node])
+    end;
+define(LastEndLine, Nodes) ->
+    io:format("~p\n", [Nodes]),
+    syntax_tree_list(LastEndLine, ",\n", Nodes).
+
+define_const(LastEndLine, [Const, Node]) ->
+    StartLine = erl_syntax:get_pos(Const),
+    {CrossRef, EndLine} = syntax_tree(StartLine, Node),
+    {[
+        newline(StartLine, LastEndLine),
+        io_lib:format("\t~c~s\n",
+                [?DEFINEBEGIN, erl_syntax:variable_literal(Const)]),
+        ",\n",
+        CrossRef,
+        io_lib:format("\t~c\n", [?DEFINEEND])
+    ], EndLine}.
+
+float(LastEndLine, Node) ->
+    StartLine = erl_syntax:get_pos(Node),
+    {[
+        newline(StartLine, LastEndLine),
+        io_lib:format("~s\n", [erl_syntax:float_literal(Node)])
+    ], StartLine}.
+
+function(LastEndLine, Node) ->
+    StartLine = erl_syntax:get_pos(Node),
+    FunctionNameAtom = erl_syntax:atom_literal(erl_syntax:function_name(Node)),
+    {[
+        newline(StartLine, LastEndLine),
+        io_lib:format("\t~c~s\n", [?FUNCTIONDEFBEGIN, FunctionNameAtom]),
+        % @fixme function args, guards, clauses
+        io_lib:format("\t~c~s\n", [?FUNCTIONDEFEND, FunctionNameAtom])
+    ], StartLine}.
 
 include(LastEndLine, [File]) ->
     StartLine = erl_syntax:get_pos(File),
@@ -105,14 +190,18 @@ include(LastEndLine, [File]) ->
 include(LastEndLine, Nodes) ->
     syntax_tree_list(LastEndLine, Nodes).
 
-function(LastEndLine, Node) ->
+integer(LastEndLine, Node) ->
     StartLine = erl_syntax:get_pos(Node),
-    FunctionNameAtom = erl_syntax:atom_literal(erl_syntax:function_name(Node)),
     {[
         newline(StartLine, LastEndLine),
-        io_lib:format("\t~c~s\n", [?FUNCTIONDEFBEGIN, FunctionNameAtom]),
-        % @fixme function args, guards, clauses
-        io_lib:format("\t~c~s\n", [?FUNCTIONDEFEND, FunctionNameAtom])
+        io_lib:format("~s\n", [erl_syntax:integer_literal(Node)])
+    ], StartLine}.
+
+nil(LastEndLine, Node) ->
+    StartLine = erl_syntax:get_pos(Node),
+    {[
+        newline(StartLine, LastEndLine),
+        "[]\n"
     ], StartLine}.
 
 record(LastEndLine, [Name, Fields]) ->
@@ -145,6 +234,18 @@ record_field(LastEndLine, Node) ->
         CrossRef2
     ], EndLine}.
 
+size_qualifier(LastEndLine, Node) ->
+    {CrossRefBody, EndLineBody} =
+        syntax_tree(LastEndLine, erl_syntax:size_qualifier_body(Node)),
+    {CrossRefSize, EndLineSize} =
+        syntax_tree(EndLineBody, erl_syntax:size_qualifier_argument(Node)),
+    EndLine = EndLineSize,
+    {[
+        CrossRefBody,
+        ":\n",
+        CrossRefSize
+    ], EndLine}.
+
 string(LastEndLine, Node) ->
     StartLine = erl_syntax:get_pos(Node),
     {[
@@ -158,33 +259,36 @@ string(LastEndLine, Node) ->
 %% @doc Outputs a deep list suitable for writing to the crossref file, as well
 %% as the last line of the crossref it has written so far
 syntax_tree(LastEndLine, Node) ->
-    StartLine = erl_syntax:get_pos(Node),
     NodeType = erl_syntax:type(Node),
-    {CrossRef, EndLine} = case NodeType of
-        atom -> atom(StartLine, Node);
-        attribute -> attribute(StartLine, Node);
-        function -> function(StartLine, Node);
-        record_field -> record_field(StartLine, Node);
-        string -> string(StartLine, Node);
-        tuple -> tuple(StartLine, Node);
+    case NodeType of
+        atom -> atom(LastEndLine, Node);
+        attribute -> attribute(LastEndLine, Node);
+        binary -> binary(LastEndLine, Node);
+        binary_field -> binary_field(LastEndLine, Node);
+        char -> char(LastEndLine, Node);
+        float -> float(LastEndLine, Node);
+        function -> function(LastEndLine, Node);
+        integer -> integer(LastEndLine, Node);
+        nil -> nil(LastEndLine, Node);
+        record_field -> record_field(LastEndLine, Node);
+        size_qualifier -> size_qualifier(LastEndLine, Node);
+        string -> string(LastEndLine, Node);
+        tuple -> tuple(LastEndLine, Node);
+        variable -> variable(LastEndLine, Node);
 
         error_marker ->
-            io:format(standard_error, "parse error: line ~b: ~s~n",
-                    [StartLine, erl_syntax:error_marker_info(Node)]),
-            {[], StartLine};
+            io:format(standard_error, "parse error: ~s~n",
+                    [erl_syntax:error_marker_info(Node)]),
+            {[], LastEndLine};
         warning_marker ->
-            io:format(standard_error, "parse warning: line ~b: ~s~n",
-                    [StartLine, erl_syntax:warning_marker_info(Node)]),
-            {[], StartLine};
+            io:format(standard_error, "parse warning: ~s~n",
+                    [erl_syntax:warning_marker_info(Node)]),
+            {[], LastEndLine};
         _ ->
-            io:format(standard_error, "error: line ~b: unhandled syntax tree type: ~s: ~p~n",
-                    [StartLine, NodeType, Node]),
-            {[], StartLine}
-    end,
-    {[
-        newline(StartLine, LastEndLine),
-        CrossRef
-    ], EndLine}.
+            io:format(standard_error, "error: unhandled syntax tree type: ~s: ~p~n",
+                    [NodeType, Node]),
+            {[], LastEndLine}
+    end.
 
 syntax_tree_list(LastEndLine, Nodes) ->
     lists:foldl(fun(Node, {Str1, EndLine1}) ->
@@ -214,6 +318,13 @@ tuple(LastEndLine, Node) ->
         CrossRef,
         "}\n"
     ], EndLine}.
+
+variable(LastEndLine, Node) ->
+    StartLine = erl_syntax:get_pos(Node),
+    {[
+        newline(StartLine, LastEndLine),
+        io_lib:format("~s\n", [erl_syntax:variable_literal(Node)])
+    ], StartLine}.
 
 
 %% utility functions

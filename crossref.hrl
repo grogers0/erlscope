@@ -1,7 +1,7 @@
--define(DEFINEBEGIN, $\#).
--define(DEFINEEND, $\)).
+-define(DEFINEBEGIN, $#).
+-define(DEFINEEND, $)).
 -define(FUNCTIONCALL, $`).
--define(FUNCTIONDEFBEGIN, $\$).
+-define(FUNCTIONDEFBEGIN, $$).
 -define(FUNCTIONDEFEND, $}).
 -define(INCLUDE, $~).
 -define(NEWFILE, $@).
