@@ -6,7 +6,7 @@
 
 -define(CSCOPE_VERSION, 15).
 
--define(TEST_FLOAT, 140.25).
+-define(tEST_FLOAT, 140.25).
 -define(TEST_ATOM, test_some_atom).
 -define(TEST_STRING, "test some string").
 -define(TEST_NIL, []).
@@ -77,10 +77,13 @@ build_crossref_of_file(Filename, Forms) ->
 %% functions to parse and write the cross reference
 
 atom(LastEndLine, Node) ->
+    atom(LastEndLine, Node, [], []).
+atom(LastEndLine, Node, PreString, PostString) ->
     StartLine = erl_syntax:get_pos(Node),
     {[
         newline(StartLine, LastEndLine),
-        io_lib:format("~s\n", [erl_syntax:atom_literal(Node)])
+        io_lib:format("~s~s\n~s",
+                [PreString, erl_syntax:atom_literal(Node), PostString])
     ], StartLine}.
 
 attribute(LastEndLine, Node) ->
@@ -136,25 +139,54 @@ char(LastEndLine, Node) ->
         io_lib:format("~s\n", [erl_syntax:char_literal(Node)])
     ], StartLine}.
 
-define(LastEndLine, [Const, Node]) ->
-    case erl_syntax:type(Const) of
-        variable -> define_const(LastEndLine, [Const, Node]);
-        _ -> syntax_tree_list(LastEndLine, ",\n", [Const, Node])
+define(LastEndLine, [Node1, Node2]) ->
+    case erl_syntax:type(Node1) of
+        application -> define_func(LastEndLine, [Node1, Node2]);
+        atom -> define_const(LastEndLine, [Node1, Node2]);
+        variable -> define_const(LastEndLine, [Node1, Node2]);
+        _ -> syntax_tree_list(LastEndLine, ",\n", [Node1, Node2])
     end;
 define(LastEndLine, Nodes) ->
-    io:format("~p\n", [Nodes]),
+    io:format("define: ~p\n", [Nodes]),
     syntax_tree_list(LastEndLine, ",\n", Nodes).
 
 define_const(LastEndLine, [Const, Node]) ->
     StartLine = erl_syntax:get_pos(Const),
-    {CrossRef, EndLine} = syntax_tree(StartLine, Node),
+    {{CrossRefName, EndLineName}, Unknown} = case erl_syntax:type(Const) of
+        atom -> {atom(StartLine, Const, ["\t", ?DEFINEBEGIN], []), false};
+        variable -> {variable(StartLine, Const, ["\t", ?DEFINEBEGIN], []), false};
+        _ -> {syntax_tree(StartLine, Const), true}
+    end,
+    {CrossRef, EndLine} = syntax_tree(EndLineName, Node),
     {[
         newline(StartLine, LastEndLine),
-        io_lib:format("\t~c~s\n",
-                [?DEFINEBEGIN, erl_syntax:variable_literal(Const)]),
+        CrossRefName,
         ",\n",
         CrossRef,
-        io_lib:format("\t~c\n", [?DEFINEEND])
+        if
+            not Unknown -> io_lib:format("\t~c\n", [?DEFINEEND]);
+            true -> []
+        end
+    ], EndLine}.
+
+define_func(LastEndLine, [Func, Node]) ->
+    StartLine = erl_syntax:get_pos(Func),
+    Oper = erl_syntax:application_operator(Func),
+    {{CrossRefFunc, EndLineFunc}, Unknown} = case erl_syntax:type(Oper) of
+        atom -> {atom(StartLine, Oper, ["\t", ?DEFINEBEGIN], []), false};
+        variable -> {variable(StartLine, Oper, ["\t", ?DEFINEBEGIN], []), false};
+        _ -> {syntax_tree(StartLine, Oper), true}
+    end,
+    {CrossRef, EndLine} = syntax_tree(EndLineFunc, Node),
+    {[
+        newline(StartLine, LastEndLine),
+        CrossRefFunc,
+        ",\n",
+        CrossRef,
+        if
+            not Unknown -> io_lib:format("\t~c\n", [?DEFINEEND]);
+            true -> []
+        end
     ], EndLine}.
 
 float(LastEndLine, Node) ->
@@ -250,8 +282,9 @@ string(LastEndLine, Node) ->
     StartLine = erl_syntax:get_pos(Node),
     {[
         newline(erl_syntax:get_pos(Node), LastEndLine),
-        erl_syntax:string_literal(Node),
-        "\n"
+        "\"",
+        erl_syntax:string_value(Node),
+        "\n\"\n"
     ], StartLine}.
 
 %% @spec syntax_tree(integer(), term()) ->
@@ -320,10 +353,15 @@ tuple(LastEndLine, Node) ->
     ], EndLine}.
 
 variable(LastEndLine, Node) ->
+    variable(LastEndLine, Node, [], []).
+variable(LastEndLine, Node, PreString, PostString) ->
     StartLine = erl_syntax:get_pos(Node),
     {[
         newline(StartLine, LastEndLine),
-        io_lib:format("~s\n", [erl_syntax:variable_literal(Node)])
+        PreString,
+        erl_syntax:variable_literal(Node),
+        "\n",
+        PostString
     ], StartLine}.
 
 
