@@ -89,6 +89,13 @@ application(LastEndLine, Node, PreStr) ->
             {nodelist, ",\n", erl_syntax:application_arguments(Node)},
             ")\n"]).
 
+% @note The body and arguments line numbers are wrong, they are always 0
+arity_qualifier(LastEndLine, Node, _PreStr) ->
+    combine(LastEndLine, [{newline, erl_syntax:get_pos(Node)},
+            combine(0, [{node, erl_syntax:arity_qualifier_body(Node)},
+                "/\n",
+                {node, erl_syntax:arity_qualifier_argument(Node)}])]).
+
 attribute(LastEndLine, Node, _PreStr) ->
     Name = erl_syntax:attribute_name(Node),
     Args = erl_syntax:attribute_arguments(Node),
@@ -159,6 +166,16 @@ integer(LastEndLine, Node, PreStr) ->
             erl_syntax:integer_literal(Node),
             "\n"]).
 
+list(LastEndLine, Node, _PreStr) ->
+    combine(LastEndLine, [{newline, erl_syntax:get_pos(Node)},
+            "[\n",
+            {nodelist, ",\n", erl_syntax:list_prefix(Node)},
+            case erl_syntax:list_suffix(Node) of
+                none -> [];
+                Suffix -> {combine, ["|\n", {node, Suffix}]}
+            end,
+            "]\n"]).
+
 nil(LastEndLine, Node, PreStr) ->
     combine(LastEndLine, [{newline, erl_syntax:get_pos(Node)},
             PreStr,
@@ -203,6 +220,7 @@ syntax_tree(LastEndLine, Node, PreStr) ->
     case NodeType of
         atom -> atom(LastEndLine, Node, PreStr);
         application -> application(LastEndLine, Node, PreStr);
+        arity_qualifier -> arity_qualifier(LastEndLine, Node, PreStr);
         attribute -> attribute(LastEndLine, Node, PreStr);
         binary -> binary(LastEndLine, Node, PreStr);
         binary_field -> binary_field(LastEndLine, Node, PreStr);
@@ -210,6 +228,7 @@ syntax_tree(LastEndLine, Node, PreStr) ->
         float -> float(LastEndLine, Node, PreStr);
         function -> function(LastEndLine, Node, PreStr);
         integer -> integer(LastEndLine, Node, PreStr);
+        list -> list(LastEndLine, Node, PreStr);
         nil -> nil(LastEndLine, Node, PreStr);
         record_field -> record_field(LastEndLine, Node, PreStr);
         size_qualifier -> size_qualifier(LastEndLine, Node, PreStr);
@@ -287,6 +306,8 @@ combine(LastEndLine, [{newline, Line} | Rest], Acc) ->
     combine(Line, Rest, [CrossRef | Acc]);
 combine(LastEndLine, [{combine, List} | Rest], Acc) ->
     combine(LastEndLine, List ++ Rest, Acc);
+combine(_LastEndLine, [{String, EndLine} | Rest], Acc) ->
+    combine(EndLine, Rest, [String | Acc]);
 combine(LastEndLine, [String | Rest], Acc) ->
     combine(LastEndLine, Rest, [String | Acc]).
 
