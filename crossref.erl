@@ -79,14 +79,23 @@ build_crossref_of_file(Filename, Forms) ->
 atom(LastEndLine, Node) ->
     atom(LastEndLine, Node, [], []).
 atom(LastEndLine, Node, PreString, PostString) ->
-    StartLine = erl_syntax:get_pos(Node),
-    {[
-        newline(StartLine, LastEndLine),
-        io_lib:format("~s~s\n~s",
-                [PreString, erl_syntax:atom_literal(Node), PostString])
-    ], StartLine}.
+    combine(LastEndLine, [{newline, erl_syntax:get_pos(Node)},
+            PreString,
+            erl_syntax:atom_literal(Node),
+            "\n",
+            PostString]).
 
 attribute(LastEndLine, Node) ->
+    %combine(LastEndLine, [{newline, erl_syntax:get_pos(Node)},
+            %"-",
+            %erl_syntax:atom_literal(erl_syntax:attribute_name(Node)),
+            %"(\n",
+            %case Name of
+                %include -> include(StartLine, Arguments);
+                %record -> record(StartLine, Arguments);
+                %define -> define(StartLine, Arguments);
+%
+                %_ -> syntax_tree_list(StartLine, ",\n", Arguments)
     StartLine = erl_syntax:get_pos(Node),
     Name = erl_syntax:atom_value(erl_syntax:attribute_name(Node)),
     Arguments = erl_syntax:attribute_arguments(Node),
@@ -105,39 +114,28 @@ attribute(LastEndLine, Node) ->
     ], EndLine}.
 
 binary(LastEndLine, Node) ->
-    StartLine = erl_syntax:get_pos(Node),
-    {CrossRef, EndLine} =
-        syntax_tree_list(StartLine, ",\n", erl_syntax:binary_fields(Node)),
-    {[
-        newline(StartLine, LastEndLine),
-        "<<\n",
-        CrossRef,
-        ">>\n"
-    ], EndLine}.
+    combine(LastEndLine, [{newline, erl_syntax:get_pos(Node)},
+            "<<\n",
+            {nodelist, ",\n", erl_syntax:binary_fields(Node)},
+            ">>\n"]).
 
 binary_field(LastEndLine, Node) ->
-    StartLine = erl_syntax:get_pos(Node),
-    {CrossRefBody, EndLineBody} =
-        syntax_tree(StartLine, erl_syntax:binary_field_body(Node)),
-    {CrossRefTypes, EndLineTypes} = case erl_syntax:binary_field_types(Node) of
-        [] -> {[], EndLineBody};
-        Types ->
-            {CrossRefTypes1, EndLineTypes1} = syntax_tree_list(EndLineBody, "-\n", Types),
-            {["/\n" ++ CrossRefTypes1], EndLineTypes1}
-    end,
-    EndLine = EndLineTypes,
-    {[
-        newline(StartLine, LastEndLine),
-        CrossRefBody,
-        CrossRefTypes
-    ], EndLine}.
+    Value = erl_syntax:binary_field_types(Node),
+    combine(LastEndLine, [{newline, erl_syntax:get_pos(Node)},
+            {node, erl_syntax:binary_field_body(Node)},
+            if
+                Value == [] -> [];
+                true -> "/\n"
+            end,
+            if
+                Value == [] -> [];
+                true -> {nodelist, "-\n", Value}
+            end]).
 
 char(LastEndLine, Node) ->
-    StartLine = erl_syntax:get_pos(Node),
-    {[
-        newline(StartLine, LastEndLine),
-        io_lib:format("~s\n", [erl_syntax:char_literal(Node)])
-    ], StartLine}.
+    combine(LastEndLine, [{newline, erl_syntax:get_pos(Node)},
+            erl_syntax:char_literal(Node),
+            "\n"]).
 
 define(LastEndLine, [Node1, Node2]) ->
     case erl_syntax:type(Node1) of
@@ -147,7 +145,6 @@ define(LastEndLine, [Node1, Node2]) ->
         _ -> syntax_tree_list(LastEndLine, ",\n", [Node1, Node2])
     end;
 define(LastEndLine, Nodes) ->
-    io:format("define: ~p\n", [Nodes]),
     syntax_tree_list(LastEndLine, ",\n", Nodes).
 
 define_const(LastEndLine, [Const, Node]) ->
@@ -190,102 +187,66 @@ define_func(LastEndLine, [Func, Node]) ->
     ], EndLine}.
 
 float(LastEndLine, Node) ->
-    StartLine = erl_syntax:get_pos(Node),
-    {[
-        newline(StartLine, LastEndLine),
-        io_lib:format("~s\n", [erl_syntax:float_literal(Node)])
-    ], StartLine}.
+    combine(LastEndLine, [{newline, erl_syntax:get_pos(Node)},
+            erl_syntax:float_literal(Node),
+            "\n"]).
 
 function(LastEndLine, Node) ->
-    StartLine = erl_syntax:get_pos(Node),
-    FunctionNameAtom = erl_syntax:atom_literal(erl_syntax:function_name(Node)),
-    {[
-        newline(StartLine, LastEndLine),
-        io_lib:format("\t~c~s\n", [?FUNCTIONDEFBEGIN, FunctionNameAtom]),
-        % @fixme function args, guards, clauses
-        io_lib:format("\t~c~s\n", [?FUNCTIONDEFEND, FunctionNameAtom])
-    ], StartLine}.
+    NameStr = erl_syntax:atom_literal(erl_syntax:function_name(Node)),
+    combine(LastEndLine, [{newline, erl_syntax:get_pos(Node)},
+            io_lib:format("\t~c~s\n",  [?FUNCTIONDEFBEGIN, NameStr]),
+            % @fixme - function args, guards, clauses
+            io_lib:format("\t~c~s\n",  [?FUNCTIONDEFEND, NameStr])]).
 
 include(LastEndLine, [File]) ->
-    StartLine = erl_syntax:get_pos(File),
-    {CrossRef, EndLine} = case erl_syntax:type(File) of
-        string ->
-            {io_lib:format("\t~c\"~s\n\"\n",
-                    [?INCLUDE, erl_syntax:string_value(File)]),
-                StartLine};
-        _ -> syntax_tree(StartLine, File)
-    end,
-    {[
-        newline(StartLine, LastEndLine),
-        CrossRef
-    ], EndLine};
+    combine(LastEndLine, [{newline, erl_syntax:get_pos(File)},
+            case erl_syntax:type(File) of
+                string -> io_lib:format("\t~c\"~s\n\"\n",
+                    [?INCLUDE, erl_syntax:string_value(File)]);
+                _ -> {node, File}
+            end]);
 include(LastEndLine, Nodes) ->
     syntax_tree_list(LastEndLine, Nodes).
 
 integer(LastEndLine, Node) ->
-    StartLine = erl_syntax:get_pos(Node),
-    {[
-        newline(StartLine, LastEndLine),
-        io_lib:format("~s\n", [erl_syntax:integer_literal(Node)])
-    ], StartLine}.
+    combine(LastEndLine, [{newline, erl_syntax:get_pos(Node)},
+            erl_syntax:integer_literal(Node),
+            "\n"]).
 
 nil(LastEndLine, Node) ->
-    StartLine = erl_syntax:get_pos(Node),
-    {[
-        newline(StartLine, LastEndLine),
-        "[]\n"
-    ], StartLine}.
+    combine(LastEndLine, [{newline, erl_syntax:get_pos(Node)}, "[]\n"]).
 
 record(LastEndLine, [Name, Fields]) ->
-    StartLine = erl_syntax:get_pos(Name),
-    {CrossRef, EndLine} = syntax_tree(StartLine, Fields),
-    {[
-        newline(StartLine, LastEndLine),
-        io_lib:format("\t~c~s\n", [?RECORDDEF, erl_syntax:atom_value(Name)]),
-        CrossRef
-    ], EndLine};
+    combine(LastEndLine, [{newline, erl_syntax:get_pos(Name)},
+            io_lib:format("\t~c~s\n", [?RECORDDEF, erl_syntax:atom_value(Name)]),
+            {node, Fields}]);
 record(LastEndLine, Nodes) ->
     syntax_tree_list(LastEndLine, Nodes).
 
 record_field(LastEndLine, Node) ->
-    StartLine = erl_syntax:get_pos(Node),
-    Name = erl_syntax:record_field_name(Node),
     Value = erl_syntax:record_field_value(Node),
-    {CrossRef1, EndLine1} = atom(StartLine, Name),
-    {CrossRef2, EndLine} = case Value of
-        none -> {[], EndLine1};
-        _ -> syntax_tree(EndLine1, Value)
-    end,
-    {[
-        newline(StartLine, LastEndLine),
-        CrossRef1,
-        if
-            Value == none -> [];
-            Value /= none -> "=\n"
-        end,
-        CrossRef2
-    ], EndLine}.
+    combine(LastEndLine, [{newline, erl_syntax:get_pos(Node)},
+            {node, erl_syntax:record_field_name(Node)},
+            if
+                Value == none -> [];
+                true -> "=\n"
+            end,
+            if
+                Value == none -> [];
+                true -> {node, Value}
+            end]).
 
+%% @note The line number position of this Node is wrong - it is always 0
 size_qualifier(LastEndLine, Node) ->
-    {CrossRefBody, EndLineBody} =
-        syntax_tree(LastEndLine, erl_syntax:size_qualifier_body(Node)),
-    {CrossRefSize, EndLineSize} =
-        syntax_tree(EndLineBody, erl_syntax:size_qualifier_argument(Node)),
-    EndLine = EndLineSize,
-    {[
-        CrossRefBody,
-        ":\n",
-        CrossRefSize
-    ], EndLine}.
+    combine(LastEndLine, [{node, erl_syntax:size_qualifier_body(Node)},
+            ":\n",
+            {node, erl_syntax:size_qualifier_argument(Node)}]).
 
 string(LastEndLine, Node) ->
-    StartLine = erl_syntax:get_pos(Node),
-    {[
-        newline(erl_syntax:get_pos(Node), LastEndLine),
-        "\"",
-        erl_syntax:string_value(Node),
-        "\n\"\n"
-    ], StartLine}.
+    combine(LastEndLine, [{newline, erl_syntax:get_pos(Node)},
+            "\"",
+            erl_syntax:string_value(Node),
+            "\n\"\n"]).
 
 %% @spec syntax_tree(integer(), term()) ->
 %%          {iolist(), integer()}
@@ -324,48 +285,62 @@ syntax_tree(LastEndLine, Node) ->
     end.
 
 syntax_tree_list(LastEndLine, Nodes) ->
-    lists:foldl(fun(Node, {Str1, EndLine1}) ->
+    {Str, EndLine} = lists:foldl(fun(Node, {Str1, EndLine1}) ->
             {Str2, EndLine2} = syntax_tree(EndLine1, Node),
-            {[Str1, Str2], EndLine2} end,
-            {[], LastEndLine}, Nodes).
+            {[Str2 | Str1], EndLine2} end,
+            {[], LastEndLine}, Nodes),
+    {lists:reverse(Str), EndLine}.
 
 syntax_tree_list(LastEndLine, Separator, Nodes) ->
     syntax_tree_list_acc(Separator, Nodes, {[], LastEndLine}).
 
-syntax_tree_list_acc(_Separator, [], Acc) -> Acc;
-syntax_tree_list_acc(_Separator, [Node], {Str1, LastEndLine}) ->
+syntax_tree_list_acc(_Separator, [], {Str, LastEndLine}) ->
+    {lists:reverse(Str), LastEndLine};
+syntax_tree_list_acc(Separator, [Node], {Str1, LastEndLine}) ->
     {Str2, EndLine} = syntax_tree(LastEndLine, Node),
-    {[Str1, Str2], EndLine};
+    syntax_tree_list_acc(Separator, [], {[Str2 | Str1], EndLine});
 syntax_tree_list_acc(Separator, [Node | Rest], {Str1, LastEndLine}) ->
     {Str2, EndLine} = syntax_tree(LastEndLine, Node),
-    syntax_tree_list_acc(Separator, Rest,
-            {[Str1, Str2, Separator], EndLine}).
+    syntax_tree_list_acc(Separator, Rest, {[Separator, Str2 | Str1], EndLine}).
 
 tuple(LastEndLine, Node) ->
-    StartLine = erl_syntax:get_pos(Node),
-    {CrossRef, EndLine} = syntax_tree_list(StartLine, ",\n",
-        erl_syntax:tuple_elements(Node)),
-    {[
-        newline(StartLine, LastEndLine),
-        "{\n",
-        CrossRef,
-        "}\n"
-    ], EndLine}.
+    combine(LastEndLine, [{newline, erl_syntax:get_pos(Node)},
+            "{\n",
+            {nodelist, ",\n", erl_syntax:tuple_elements(Node)},
+            "}\n"]).
 
 variable(LastEndLine, Node) ->
     variable(LastEndLine, Node, [], []).
 variable(LastEndLine, Node, PreString, PostString) ->
-    StartLine = erl_syntax:get_pos(Node),
-    {[
-        newline(StartLine, LastEndLine),
-        PreString,
-        erl_syntax:variable_literal(Node),
-        "\n",
-        PostString
-    ], StartLine}.
+    combine(LastEndLine, [{newline, erl_syntax:get_pos(Node)},
+            PreString,
+            erl_syntax:variable_literal(Node),
+            "\n",
+            PostString]).
 
 
 %% utility functions
+
+combine(LastEndLine, List) ->
+    combine(LastEndLine, List, []).
+
+combine(LastEndLine, [], Acc) ->
+    {lists:reverse(Acc), LastEndLine};
+combine(LastEndLine, [{node, Node} | Rest], Acc) ->
+    {CrossRef, EndLine} = syntax_tree(LastEndLine, Node),
+    combine(EndLine, Rest, [CrossRef | Acc]);
+combine(LastEndLine, [{nodelist, Nodes} | Rest], Acc) ->
+    {CrossRef, EndLine} = syntax_tree_list(LastEndLine, Nodes),
+    combine(EndLine, Rest, [CrossRef | Acc]);
+combine(LastEndLine, [{nodelist, Sep, Nodes} | Rest], Acc) ->
+    {CrossRef, EndLine} = syntax_tree_list(LastEndLine, Sep, Nodes),
+    combine(EndLine, Rest, [CrossRef | Acc]);
+combine(LastEndLine, [{newline, Line} | Rest], Acc) ->
+    CrossRef = newline(Line, LastEndLine),
+    combine(Line, Rest, [CrossRef | Acc]);
+combine(LastEndLine, [String | Rest], Acc) when is_list(String) ->
+    combine(LastEndLine, Rest, [String | Acc]).
+
 
 newline(StartLine, LastEndLine) ->
     if
